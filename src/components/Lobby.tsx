@@ -22,7 +22,7 @@ export const Lobby: React.FC<LobbyProps> = ({
   errorMessage,
 }) => {
   const [mode, setMode] = useState<'create' | 'join'>('create');
-  const [playerName, setPlayerName] = useState('');
+  const [playerName, setPlayerName] = useState(() => localStorage.getItem('rummikub_player_name') || '');
   const [roomIdInput, setRoomIdInput] = useState('');
   const [copied, setCopied] = useState(false);
 
@@ -42,14 +42,18 @@ export const Lobby: React.FC<LobbyProps> = ({
 
   const handleCreateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!playerName.trim()) return;
-    onCreateRoom(playerName.trim(), { turnTimer, orderOption });
+    const name = playerName.trim();
+    if (!name) return;
+    localStorage.setItem('rummikub_player_name', name);
+    onCreateRoom(name, { turnTimer, orderOption });
   };
 
   const handleJoinSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!playerName.trim() || !roomIdInput.trim()) return;
-    onJoinRoom(roomIdInput.trim(), playerName.trim());
+    const name = playerName.trim();
+    if (!name || !roomIdInput.trim()) return;
+    localStorage.setItem('rummikub_player_name', name);
+    onJoinRoom(roomIdInput.trim(), name);
   };
 
   return (

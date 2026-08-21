@@ -145,7 +145,6 @@ export const App: React.FC = () => {
       newTableGrid = newTableGrid.filter((gt) => gt.tile.id !== id);
     });
 
-    // Add back to hand if not already present
     tilesToReturn.forEach((tile) => {
       if (!newHand.some((t) => t.id === tile.id)) {
         newHand.push(tile);
@@ -154,6 +153,24 @@ export const App: React.FC = () => {
 
     setSelectedTileIds([]);
     peerService.sendClientAction('ACTION_MOVE', { hand: newHand, tableGrid: newTableGrid });
+  };
+
+  // Handles drag-and-drop tile from grid board back onto hand rack
+  const handleDropTileToHand = (tileId: string) => {
+    if (!isMyTurn || !gameState || !localPlayer) return;
+
+    let newHand = [...localPlayer.hand];
+    let newTableGrid = [...gameState.tableGrid];
+
+    const gridIdx = newTableGrid.findIndex((gt) => gt.tile.id === tileId);
+    if (gridIdx !== -1) {
+      const tileToReturn = newTableGrid.splice(gridIdx, 1)[0].tile;
+      if (!newHand.some((t) => t.id === tileToReturn.id)) {
+        newHand.push(tileToReturn);
+      }
+      setSelectedTileIds([]);
+      peerService.sendClientAction('ACTION_MOVE', { hand: newHand, tableGrid: newTableGrid });
+    }
   };
 
   // Drag and Drop single tile onto cell (targetRow, targetCol)
@@ -278,6 +295,7 @@ export const App: React.FC = () => {
           onTileClick={handleTileClick}
           onRackClick={handleReturnSelectedGridTilesToHand}
           onReturnToHand={handleReturnSelectedGridTilesToHand}
+          onDropTileToHand={handleDropTileToHand}
           onSortHand={handleSortHand}
           onEndTurn={handleEndTurn}
           onDrawTile={handleDrawTile}

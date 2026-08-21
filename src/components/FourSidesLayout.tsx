@@ -45,13 +45,13 @@ export const FourSidesLayout: React.FC<FourSidesLayoutProps> = ({
     const getPositionClasses = () => {
       switch (position) {
         case 'top':
-          return 'col-start-2 row-start-1 justify-self-center self-start flex-row';
+          return 'col-start-2 row-start-1 justify-self-center self-start flex-row px-3 py-1.5';
         case 'left':
           return 'col-start-1 row-start-2 justify-self-start self-center flex-col py-2 px-1.5';
         case 'right':
           return 'col-start-3 row-start-2 justify-self-end self-center flex-col py-2 px-1.5';
         case 'bottom':
-          return 'col-start-2 row-start-3 justify-self-center self-end flex-row';
+          return 'col-start-2 row-start-3 justify-self-center self-end flex-row px-3 py-1.5';
       }
     };
 
@@ -85,13 +85,21 @@ export const FourSidesLayout: React.FC<FourSidesLayoutProps> = ({
 
         <div className={`flex ${isSide ? 'flex-col items-center' : 'flex-col'}`}>
           <div className="flex items-center gap-1">
-            <span
-              className={`font-semibold text-xs text-white truncate max-w-[80px] ${
-                isSide ? '[writing-mode:vertical-rl] tracking-widest my-1' : ''
-              }`}
-            >
-              {player.name}
-            </span>
+            {isSide ? (
+              /* Upright Vertical Stacked Name */
+              <div className="flex flex-col items-center leading-none text-xs font-semibold text-white my-1">
+                {player.name.split('').map((char, idx) => (
+                  <span key={idx} className="my-0.2 select-none">
+                    {char}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <span className="font-semibold text-xs text-white truncate max-w-[90px]">
+                {player.name} {isSelf && '(自己)'}
+              </span>
+            )}
+
             {isCurrentTurn && (
               <span className="flex h-2 w-2 relative">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
@@ -100,7 +108,7 @@ export const FourSidesLayout: React.FC<FourSidesLayoutProps> = ({
             )}
           </div>
 
-          <div className={`flex items-center text-[10px] text-slate-400 ${isSide ? 'flex-col gap-0.5 mt-1' : 'gap-1.5'}`}>
+          <div className={`flex items-center text-[10px] text-slate-400 ${isSide ? 'flex-col gap-0.5 mt-0.5' : 'gap-1.5'}`}>
             <span><strong className="text-amber-300 font-bold">{player.hand.length}</strong>張</span>
             <span className={player.hasMelded ? 'text-emerald-400 font-medium' : 'text-slate-400'}>
               {player.hasMelded ? '✓破冰' : '未破'}

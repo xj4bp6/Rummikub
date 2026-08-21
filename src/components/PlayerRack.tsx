@@ -10,6 +10,7 @@ interface PlayerRackProps {
   onTileClick: (tile: Tile) => void;
   onRackClick: () => void;
   onReturnToHand: () => void;
+  onDropTileToHand: (tileId: string) => void;
   onSortHand: (sortBy: 'color' | 'value') => void;
   onEndTurn: () => void;
   onDrawTile: () => void;
@@ -25,6 +26,7 @@ export const PlayerRack: React.FC<PlayerRackProps> = ({
   onTileClick,
   onRackClick,
   onReturnToHand,
+  onDropTileToHand,
   onSortHand,
   onEndTurn,
   onDrawTile,
@@ -33,6 +35,18 @@ export const PlayerRack: React.FC<PlayerRackProps> = ({
   hasMelded,
 }) => {
   const selectedSet = new Set(selectedTileIds);
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    const tileId = e.dataTransfer.getData('text/plain');
+    if (tileId && isMyTurn) {
+      onDropTileToHand(tileId);
+    }
+  };
 
   return (
     <div className="w-full bg-slate-900 border-t border-slate-800 p-2 flex flex-col gap-2 shadow-2xl z-30 select-none">
@@ -132,8 +146,10 @@ export const PlayerRack: React.FC<PlayerRackProps> = ({
         )}
       </div>
 
-      {/* Hand Cards Horizontal Rack - Mobile Touch Responsive */}
+      {/* Hand Cards Horizontal Rack - Supports Drag & Drop & Touch Drop */}
       <div
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
         onClick={() => {
           if (isMyTurn && isGridTileSelected) {
             onRackClick();
@@ -150,7 +166,7 @@ export const PlayerRack: React.FC<PlayerRackProps> = ({
       >
         {hand.length === 0 ? (
           <div className="w-full text-center text-xs text-slate-500 py-3">
-            {isGridTileSelected ? '點擊此處收回卡牌至手牌' : '手牌已完全出完！'}
+            {isGridTileSelected ? '點擊或將卡牌拖拽至此處收回手牌' : '手牌已完全出完！'}
           </div>
         ) : (
           hand.map((tile) => (
