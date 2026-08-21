@@ -206,14 +206,12 @@ export const App: React.FC = () => {
     const sorted = sortHand(localPlayer.hand, sortBy);
     setSelectedTileIds([]);
 
-    if (isMyTurn) {
-      peerService.sendClientAction('ACTION_MOVE', { hand: sorted, tableGrid: gameState.tableGrid });
-    } else {
-      const updatedPlayers = gameState.players.map((p) =>
-        p.id === localPlayerId ? { ...p, hand: sorted } : p
-      );
-      setGameState({ ...gameState, players: updatedPlayers });
-    }
+    const updatedPlayers = gameState.players.map((p) =>
+      p.id === localPlayerId ? { ...p, hand: sorted } : p
+    );
+    setGameState({ ...gameState, players: updatedPlayers });
+
+    peerService.sendClientAction('ACTION_SORT_HAND', { hand: sorted });
   };
 
   // Turn Actions

@@ -185,6 +185,18 @@ export class PeerService {
         break;
       }
 
+      case 'ACTION_SORT_HAND': {
+        const p = this.gameState.players.find((player) => player.id === msg.senderId);
+        if (p) {
+          p.hand = msg.payload.hand;
+          if (this.isPlayerTurn(msg.senderId) && this.gameState.turnSnapshot) {
+            this.gameState.turnSnapshot.hand = JSON.parse(JSON.stringify(p.hand));
+          }
+          this.broadcastState();
+        }
+        break;
+      }
+
       case 'ACTION_END_TURN': {
         if (this.isPlayerTurn(msg.senderId)) {
           this.handleEndTurnAttempt(conn, msg.senderId, msg.payload.hand, msg.payload.tableGrid);

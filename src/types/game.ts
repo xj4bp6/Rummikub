@@ -67,6 +67,7 @@ export type PeerMessageType =
   | 'JOIN_REQUEST'
   | 'GAME_STATE_UPDATE'
   | 'ACTION_MOVE'
+  | 'ACTION_SORT_HAND'
   | 'ACTION_END_TURN'
   | 'ACTION_DRAW'
   | 'ACTION_RESET_TURN'
