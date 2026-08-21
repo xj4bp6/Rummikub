@@ -1,7 +1,7 @@
 import Peer, { type DataConnection } from 'peerjs';
-import type { GameState, PeerMessage, PeerMessageType, Player, RoomSettings, Tile, TileSet } from '../types/game';
+import type { GameState, GridTile, PeerMessage, PeerMessageType, Player, RoomSettings, Tile } from '../types/game';
 import { generateFullDeck, shuffleDeck, dealInitialHands } from '../utils/deck';
-import { validateTableSets, calculateMeldPoints, calculateHandEndgamePoints } from '../utils/validation';
+import { validateGridBoard, calculateMeldPoints, calculateHandEndgamePoints } from '../utils/validation';
 
 export class PeerService {
   private peer: Peer | null = null;
@@ -24,19 +24,15 @@ export class PeerService {
     return new Promise((resolve, reject) => {
       this.isHost = true;
 
-      // Clean ID format
       const roomId = customRoomId 
         ? customRoomId.trim().toLowerCase().replace(/[^a-z0-9]/g, '')
         : Math.floor(100000 + Math.random() * 900000).toString();
 
-      this.peer = new Peer(roomId, {
-        debug: 1,
-      });
+      this.peer = new Peer(roomId, { debug: 1 });
 
       this.peer.on('open', (id) => {
         this.localPlayerId = id;
         
-        // Initialize GameState on Host
         this.gameState = {
           roomId: id,
           status: 'lobby',
@@ -51,7 +47,7 @@ export class PeerService {
           ],
           currentTurnIndex: 0,
           drawPile: [],
-          tableSets: [],
+          tableGrid: [],
           turnTimerRemaining: 60,
           settings: {
             turnTimer: 60,
@@ -81,24 +77,18 @@ export class PeerService {
   public joinRoom(roomId: string, playerName: string): Promise<string> {
     return new Promise((resolve, reject) => {
       this.isHost = false;
-
       const cleanedRoomId = roomId.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
 
-      this.peer = new Peer({
-        debug: 1,
-      });
+      this.peer = new Peer({ debug: 1 });
 
       this.peer.on('open', (myPeerId) => {
         this.localPlayerId = myPeerId;
 
-        const conn = this.peer!.connect(cleanedRoomId, {
-          reliable: true,
-        });
+        const conn = this.peer!.connect(cleanedRoomId, { reliable: true });
 
         conn.on('open', () => {
           this.connections.set(cleanedRoomId, conn);
 
-          // Send JOIN_REQUEST to host
           const joinMsg: PeerMessage = {
             type: 'JOIN_REQUEST',
             senderId: myPeerId,
@@ -133,9 +123,6 @@ export class PeerService {
     });
   }
 
-  /**
-   * Host logic: handles incoming client connections
-   */
   private handleHostIncomingConnection(conn: DataConnection) {
     conn.on('open', () => {
       this.connections.set(conn.peer, conn);
@@ -149,11 +136,9 @@ export class PeerService {
     conn.on('close', () => {
       this.connections.delete(conn.peer);
       if (this.gameState && this.gameState.status === 'lobby') {
-        // Remove player from lobby
         this.gameState.players = this.gameState.players.filter((p) => p.id !== conn.peer);
         this.broadcastState();
       } else if (this.gameState) {
-        // Mark player as disconnected during game
         const player = this.gameState.players.find((p) => p.id === conn.peer);
         if (player) {
           player.isDisconnected = true;
@@ -163,9 +148,6 @@ export class PeerService {
     });
   }
 
-  /**
-   * Host logic: process incoming messages from clients
-   */
   private handleHostReceivedMessage(conn: DataConnection, msg: PeerMessage) {
     if (!this.gameState) return;
 
@@ -194,9 +176,8 @@ export class PeerService {
       }
 
       case 'ACTION_MOVE': {
-        // Client syncs transient hand & table state during turn
         if (this.isPlayerTurn(msg.senderId)) {
-          this.gameState.tableSets = msg.payload.tableSets;
+          this.gameState.tableGrid = msg.payload.tableGrid || [];
           const p = this.gameState.players.find((player) => player.id === msg.senderId);
           if (p) p.hand = msg.payload.hand;
           this.broadcastState();
@@ -206,7 +187,7 @@ export class PeerService {
 
       case 'ACTION_END_TURN': {
         if (this.isPlayerTurn(msg.senderId)) {
-          this.handleEndTurnAttempt(msg.senderId, msg.payload.hand, msg.payload.tableSets);
+          this.handleEndTurnAttempt(conn, msg.senderId, msg.payload.hand, msg.payload.tableGrid);
         }
         break;
       }
@@ -227,14 +208,13 @@ export class PeerService {
     }
   }
 
-  /**
-   * Client logic: process data received from host
-   */
   private handleClientReceivedData(data: any) {
     const msg = data as PeerMessage;
     if (msg.type === 'GAME_STATE_UPDATE') {
       this.gameState = msg.payload;
       this.notifyStateChange();
+    } else if (msg.type === 'ACTION_ERROR') {
+      if (this.onError) this.onError(msg.payload);
     } else if (msg.type === 'HOST_LEAVING') {
       if (this.onError) this.onError(msg.payload || '房主已離開房間');
     }
@@ -255,7 +235,6 @@ export class PeerService {
       return;
     }
 
-    // 1. Determine player turn order
     let players = [...this.gameState.players];
     if (this.gameState.settings.orderOption === 'random') {
       for (let i = players.length - 1; i > 0; i--) {
@@ -264,27 +243,40 @@ export class PeerService {
       }
     }
 
-    // 2. Generate and deal cards
     const fullDeck = shuffleDeck(generateFullDeck());
     const dealResult = dealInitialHands(players, fullDeck);
 
     this.gameState.players = dealResult.players;
     this.gameState.drawPile = dealResult.drawPile;
-    this.gameState.tableSets = [];
+    this.gameState.tableGrid = [];
     this.gameState.status = 'playing';
     this.gameState.currentTurnIndex = 0;
     this.gameState.winnerId = null;
 
-    // Create snapshot for first player
     this.takeTurnSnapshot();
     this.startTurnTimer();
     this.broadcastState();
   }
 
   /**
+   * Helper to send error toast specifically to the acting player (Client or Host)
+   */
+  private sendErrorToPlayer(conn: DataConnection | null, playerId: string, errorText: string) {
+    if (playerId === this.localPlayerId) {
+      if (this.onError) this.onError(errorText);
+    } else if (conn && conn.open) {
+      conn.send({
+        type: 'ACTION_ERROR',
+        senderId: this.localPlayerId,
+        payload: errorText,
+      });
+    }
+  }
+
+  /**
    * Player attempts to end turn
    */
-  public handleEndTurnAttempt(playerId: string, updatedHand: any[], updatedTableSets: any[]) {
+  public handleEndTurnAttempt(conn: DataConnection | null, playerId: string, updatedHand: Tile[], updatedTableGrid: GridTile[]) {
     if (!this.gameState) return;
 
     const player = this.gameState.players[this.gameState.currentTurnIndex];
@@ -293,70 +285,58 @@ export class PeerService {
     const snapshot = this.gameState.turnSnapshot;
     if (!snapshot) return;
 
-    // 1. Verify Table Sets validity
-    const tableCheck = validateTableSets(updatedTableSets);
-    if (!tableCheck.allValid) {
-      if (this.onError) this.onError('牌桌上存在不合法的組合！');
+    // 1. Validate Grid Board
+    const gridValidation = validateGridBoard(updatedTableGrid);
+    if (!gridValidation.allValid) {
+      this.sendErrorToPlayer(conn, playerId, gridValidation.errorReason || '牌桌存在不合法的組合！');
       return;
     }
 
-    // 2. Verify player played at least 1 card from hand
+    // 2. Check if player played at least 1 card from hand
     const cardsPlayedFromHandCount = snapshot.hand.length - updatedHand.length;
     if (cardsPlayedFromHandCount <= 0) {
-      if (this.onError) this.onError('出牌回合必須至少打出 1 張手牌，否則請點擊摸牌！');
+      this.sendErrorToPlayer(conn, playerId, '出牌回合必須至少打出 1 張手牌，否則請點擊摸牌！');
       return;
     }
 
-    // 3. Initial Meld check if not melded yet
+    // 3. Check Initial Meld (>= 30 pts) if not melded yet
     if (!player.hasMelded) {
-      // Find cards played from hand
-      const playedSets = updatedTableSets.filter(
-        (set: TileSet) => set.tiles.length >= 3 && set.tiles.some((t: Tile) => !snapshot.tableSets.flatMap((s: TileSet) => s.tiles).some((st: Tile) => st.id === t.id))
-      );
-
-      const meldResult = calculateMeldPoints(playedSets);
+      const meldResult = calculateMeldPoints(gridValidation.extractedSets);
       if (!meldResult.isValidMelds || meldResult.totalPoints < 30) {
-        if (this.onError) this.onError(`破冰失敗！首次出牌數字總和需 $\\ge 30$ 分（目前為 ${meldResult.totalPoints} 分）`);
+        this.sendErrorToPlayer(conn, playerId, `破冰失敗！首次出牌數字總和需 >= 30 分（目前為 ${meldResult.totalPoints} 分）`);
         return;
       }
       player.hasMelded = true;
     }
 
-    // Commit turn changes
+    // Commit turn
     player.hand = updatedHand;
-    this.gameState.tableSets = updatedTableSets.filter((s) => s.tiles.length > 0);
+    this.gameState.tableGrid = updatedTableGrid;
 
-    // Check Win Condition
+    // Win condition check
     if (player.hand.length === 0) {
       this.endGame(player.id, `${player.name} 已清空手牌獲勝！`);
       return;
     }
 
-    // Advance turn
     this.advanceTurn();
   }
 
-  /**
-   * Player draws a card and ends turn
-   */
   public handleDrawTileAction(playerId: string) {
     if (!this.gameState) return;
     const player = this.gameState.players[this.gameState.currentTurnIndex];
     if (!player || player.id !== playerId) return;
 
-    // Rollback table and hand to snapshot first
     if (this.gameState.turnSnapshot) {
       player.hand = [...this.gameState.turnSnapshot.hand];
-      this.gameState.tableSets = [...this.gameState.turnSnapshot.tableSets];
+      this.gameState.tableGrid = [...this.gameState.turnSnapshot.tableGrid];
       player.hasMelded = this.gameState.turnSnapshot.hasMelded;
     }
 
-    // Draw 1 tile if drawPile has cards
     if (this.gameState.drawPile.length > 0) {
       const drawnTile = this.gameState.drawPile.pop()!;
       player.hand.push(drawnTile);
     } else {
-      // Draw pile exhausted - check if game end needed
       this.checkDeckExhaustedEndGame();
       return;
     }
@@ -364,9 +344,6 @@ export class PeerService {
     this.advanceTurn();
   }
 
-  /**
-   * Resets local turn state back to start of turn (Rollback)
-   */
   public handleRollbackAction(playerId: string) {
     if (!this.gameState) return;
     const player = this.gameState.players[this.gameState.currentTurnIndex];
@@ -374,7 +351,7 @@ export class PeerService {
 
     if (this.gameState.turnSnapshot) {
       player.hand = [...this.gameState.turnSnapshot.hand];
-      this.gameState.tableSets = [...this.gameState.turnSnapshot.tableSets];
+      this.gameState.tableGrid = [...this.gameState.turnSnapshot.tableGrid];
       player.hasMelded = this.gameState.turnSnapshot.hasMelded;
       this.broadcastState();
     }
@@ -395,7 +372,7 @@ export class PeerService {
     if (currPlayer) {
       this.gameState.turnSnapshot = {
         hand: JSON.parse(JSON.stringify(currPlayer.hand)),
-        tableSets: JSON.parse(JSON.stringify(this.gameState.tableSets)),
+        tableGrid: JSON.parse(JSON.stringify(this.gameState.tableGrid)),
         hasMelded: currPlayer.hasMelded,
       };
     }
@@ -407,7 +384,6 @@ export class PeerService {
 
     const timerSetting = this.gameState.settings.turnTimer;
     if (timerSetting === 0) {
-      // Unlimited timer
       this.gameState.turnTimerRemaining = 0;
       return;
     }
@@ -422,7 +398,6 @@ export class PeerService {
 
       this.gameState.turnTimerRemaining--;
       if (this.gameState.turnTimerRemaining <= 0) {
-        // Time out! Force Rollback + Penalty Draw tile
         const currPlayer = this.gameState.players[this.gameState.currentTurnIndex];
         if (currPlayer) {
           this.handleDrawTileAction(currPlayer.id);
@@ -436,9 +411,7 @@ export class PeerService {
   private checkDeckExhaustedEndGame() {
     if (!this.gameState) return;
 
-    // Check if draw pile is empty
     if (this.gameState.drawPile.length === 0) {
-      // Calculate scores for all players (Joker = 30 pts)
       const scores: Record<string, { handSum: number; detail: string }> = {};
       let minScore = Infinity;
       let winnerId = '';
@@ -469,15 +442,11 @@ export class PeerService {
     this.broadcastState();
   }
 
-  // --- Actions Callable by Client (dispatches via WebRTC or Host local call) ---
-
   public sendClientAction(type: PeerMessageType, payload?: any) {
     if (this.isHost) {
-      // Local Host invocation
       const msg: PeerMessage = { type, senderId: this.localPlayerId, payload };
-      this.handleHostReceivedMessage({ send: () => {}, peer: this.localPlayerId } as any, msg);
+      this.handleHostReceivedMessage(null as any, msg);
     } else {
-      // Send to Host
       const hostConn = this.connections.get(this.gameState?.roomId || '');
       if (hostConn && hostConn.open) {
         hostConn.send({ type, senderId: this.localPlayerId, payload });
@@ -488,10 +457,8 @@ export class PeerService {
   private broadcastState() {
     if (!this.isHost || !this.gameState) return;
 
-    // Notify local Host UI
     this.notifyStateChange();
 
-    // Broadcast state to all connected Clients
     const msg: PeerMessage = {
       type: 'GAME_STATE_UPDATE',
       senderId: this.localPlayerId,

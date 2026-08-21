@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import type { GameState, RoomSettings, Tile, TileSet } from './types/game';
+import type { GameState, RoomSettings, Tile } from './types/game';
 import { peerService } from './services/peer';
 import { sortHand } from './utils/deck';
+import { findConnectedChain } from './utils/validation';
 import { Lobby } from './components/Lobby';
 import { GameHeader } from './components/GameHeader';
 import { FourSidesLayout } from './components/FourSidesLayout';
@@ -14,9 +15,8 @@ export const App: React.FC = () => {
   const [localPlayerId, setLocalPlayerId] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Tile Selection State
-  const [selectedTileId, setSelectedTileId] = useState<string | null>(null);
-  const [selectedSourceSetId, setSelectedSourceSetId] = useState<string | undefined>(undefined);
+  // Multi-tile selection state
+  const [selectedTileIds, setSelectedTileIds] = useState<string[]>([]);
 
   useEffect(() => {
     peerService.onStateChange = (newState) => {
@@ -26,9 +26,12 @@ export const App: React.FC = () => {
 
     peerService.onError = (msg) => {
       setErrorMessage(msg);
-      setTimeout(() => setErrorMessage(null), 4000);
+      setTimeout(() => setErrorMessage(null), 4500);
     };
   }, []);
+
+  const localPlayer = gameState?.players.find((p) => p.id === localPlayerId);
+  const isMyTurn = gameState?.status === 'playing' && gameState.players[gameState.currentTurnIndex]?.id === localPlayerId;
 
   // --- Lobby Handlers ---
   const handleCreateRoom = async (hostName: string, settings: RoomSettings) => {
@@ -60,117 +63,116 @@ export const App: React.FC = () => {
     window.location.reload();
   };
 
-  // --- In-Game Interaction Handlers ---
+  // --- In-Game Grid & Chain Tile Selection ---
 
-  const localPlayer = gameState?.players.find((p) => p.id === localPlayerId);
-  const isMyTurn = gameState?.status === 'playing' && gameState.players[gameState.currentTurnIndex]?.id === localPlayerId;
+  const getSelectedTilesObjects = (): Tile[] => {
+    if (!localPlayer || !gameState) return [];
+    const tiles: Tile[] = [];
 
-  // Handle tile click (either from Hand or Table)
-  const handleTileClick = (tile: Tile, sourceSetId?: string) => {
-    if (!isMyTurn) return;
+    selectedTileIds.forEach((id) => {
+      // Find in hand
+      const inHand = localPlayer.hand.find((t) => t.id === id);
+      if (inHand) {
+        tiles.push(inHand);
+        return;
+      }
+      // Find in grid
+      const inGrid = gameState.tableGrid.find((gt) => gt.tile.id === id);
+      if (inGrid) {
+        tiles.push(inGrid.tile);
+      }
+    });
 
-    if (selectedTileId === tile.id) {
+    return tiles;
+  };
+
+  const handleTileClick = (tile: Tile) => {
+    if (!isMyTurn || !localPlayer) return;
+
+    if (selectedTileIds.includes(tile.id)) {
       // Unselect if clicked again
-      setSelectedTileId(null);
-      setSelectedSourceSetId(undefined);
+      setSelectedTileIds([]);
     } else {
-      setSelectedTileId(tile.id);
-      setSelectedSourceSetId(sourceSetId);
+      // Check if clicked in Hand -> Auto chain detection!
+      const handIndex = localPlayer.hand.findIndex((t) => t.id === tile.id);
+      if (handIndex !== -1) {
+        const chain = findConnectedChain(localPlayer.hand, handIndex);
+        setSelectedTileIds(chain.map((t) => t.id));
+      } else {
+        // Single selection on grid
+        setSelectedTileIds([tile.id]);
+      }
     }
   };
 
-  // Move selected tile into an existing table set
-  const handleMoveTileToSet = (targetSetId: string) => {
-    if (!isMyTurn || !selectedTileId || !gameState || !localPlayer) return;
+  // Move selected tiles to grid starting at cell (targetRow, targetCol)
+  const handleCellClick = (targetRow: number, targetCol: number) => {
+    if (!isMyTurn || selectedTileIds.length === 0 || !gameState || !localPlayer) return;
 
-    let tileToMove: Tile | null = null;
     let newHand = [...localPlayer.hand];
-    let newTableSets = JSON.parse(JSON.stringify(gameState.tableSets)) as TileSet[];
+    let newTableGrid = [...gameState.tableGrid];
+    const tilesToMove = getSelectedTilesObjects();
 
-    // 1. Remove tile from source (Hand or Table Set)
-    if (!selectedSourceSetId) {
-      // Source is Hand
-      const tileIdx = newHand.findIndex((t) => t.id === selectedTileId);
-      if (tileIdx !== -1) {
-        tileToMove = newHand.splice(tileIdx, 1)[0];
+    // 1. Remove selected tiles from hand & grid
+    selectedTileIds.forEach((id) => {
+      newHand = newHand.filter((t) => t.id !== id);
+      newTableGrid = newTableGrid.filter((gt) => gt.tile.id !== id);
+    });
+
+    // 2. Place selected tiles starting at (targetRow, targetCol + i)
+    tilesToMove.forEach((tile, idx) => {
+      const colOffset = targetCol + idx;
+      if (colOffset < 16) {
+        // Clear any existing tile at destination
+        newTableGrid = newTableGrid.filter((gt) => !(gt.row === targetRow && gt.col === colOffset));
+        newTableGrid.push({ tile, row: targetRow, col: colOffset });
       }
-    } else {
-      // Source is Table Set
-      const sourceSet = newTableSets.find((s) => s.id === selectedSourceSetId);
-      if (sourceSet) {
-        const tileIdx = sourceSet.tiles.findIndex((t) => t.id === selectedTileId);
-        if (tileIdx !== -1) {
-          tileToMove = sourceSet.tiles.splice(tileIdx, 1)[0];
-        }
-      }
-    }
+    });
 
-    // 2. Add tile to target Set
-    if (tileToMove) {
-      const targetSet = newTableSets.find((s) => s.id === targetSetId);
-      if (targetSet) {
-        targetSet.tiles.push(tileToMove);
-      }
-    }
-
-    // 3. Clear empty sets
-    newTableSets = newTableSets.filter((s) => s.tiles.length > 0);
-
-    // 4. Update state & sync
-    setSelectedTileId(null);
-    setSelectedSourceSetId(undefined);
-    peerService.sendClientAction('ACTION_MOVE', { hand: newHand, tableSets: newTableSets });
+    setSelectedTileIds([]);
+    peerService.sendClientAction('ACTION_MOVE', { hand: newHand, tableGrid: newTableGrid });
   };
 
-  // Create a brand new set on table using selected tile
-  const handleCreateNewSetWithSelectedTile = () => {
-    if (!isMyTurn || !selectedTileId || !gameState || !localPlayer) return;
+  // Drag and Drop single tile onto cell (targetRow, targetCol)
+  const handleDropTileToCell = (targetRow: number, targetCol: number, tileId: string) => {
+    if (!isMyTurn || !gameState || !localPlayer) return;
+
+    let newHand = [...localPlayer.hand];
+    let newTableGrid = [...gameState.tableGrid];
 
     let tileToMove: Tile | null = null;
-    let newHand = [...localPlayer.hand];
-    let newTableSets = JSON.parse(JSON.stringify(gameState.tableSets)) as TileSet[];
 
-    if (!selectedSourceSetId) {
-      // From Hand
-      const tileIdx = newHand.findIndex((t) => t.id === selectedTileId);
-      if (tileIdx !== -1) {
-        tileToMove = newHand.splice(tileIdx, 1)[0];
-      }
+    // Find in hand
+    const handIdx = newHand.findIndex((t) => t.id === tileId);
+    if (handIdx !== -1) {
+      tileToMove = newHand.splice(handIdx, 1)[0];
     } else {
-      // From Table
-      const sourceSet = newTableSets.find((s) => s.id === selectedSourceSetId);
-      if (sourceSet) {
-        const tileIdx = sourceSet.tiles.findIndex((t) => t.id === selectedTileId);
-        if (tileIdx !== -1) {
-          tileToMove = sourceSet.tiles.splice(tileIdx, 1)[0];
-        }
+      // Find in grid
+      const gridIdx = newTableGrid.findIndex((gt) => gt.tile.id === tileId);
+      if (gridIdx !== -1) {
+        tileToMove = newTableGrid.splice(gridIdx, 1)[0].tile;
       }
     }
 
     if (tileToMove) {
-      const newSet: TileSet = {
-        id: `set-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-        tiles: [tileToMove],
-      };
-      newTableSets.push(newSet);
+      // Clear target cell
+      newTableGrid = newTableGrid.filter((gt) => !(gt.row === targetRow && gt.col === targetCol));
+      newTableGrid.push({ tile: tileToMove, row: targetRow, col: targetCol });
+
+      setSelectedTileIds([]);
+      peerService.sendClientAction('ACTION_MOVE', { hand: newHand, tableGrid: newTableGrid });
     }
-
-    newTableSets = newTableSets.filter((s) => s.tiles.length > 0);
-
-    setSelectedTileId(null);
-    setSelectedSourceSetId(undefined);
-    peerService.sendClientAction('ACTION_MOVE', { hand: newHand, tableSets: newTableSets });
   };
 
   // Sort hand
   const handleSortHand = (sortBy: 'color' | 'value') => {
     if (!localPlayer || !gameState) return;
     const sorted = sortHand(localPlayer.hand, sortBy);
+    setSelectedTileIds([]);
 
     if (isMyTurn) {
-      peerService.sendClientAction('ACTION_MOVE', { hand: sorted, tableSets: gameState.tableSets });
+      peerService.sendClientAction('ACTION_MOVE', { hand: sorted, tableGrid: gameState.tableGrid });
     } else {
-      // Local client visual sort
       const updatedPlayers = gameState.players.map((p) =>
         p.id === localPlayerId ? { ...p, hand: sorted } : p
       );
@@ -183,23 +185,22 @@ export const App: React.FC = () => {
     if (!isMyTurn || !gameState || !localPlayer) return;
     peerService.sendClientAction('ACTION_END_TURN', {
       hand: localPlayer.hand,
-      tableSets: gameState.tableSets,
+      tableGrid: gameState.tableGrid,
     });
   };
 
   const handleDrawTile = () => {
     if (!isMyTurn) return;
+    setSelectedTileIds([]);
     peerService.sendClientAction('ACTION_DRAW');
   };
 
   const handleResetTurn = () => {
     if (!isMyTurn) return;
-    setSelectedTileId(null);
-    setSelectedSourceSetId(undefined);
+    setSelectedTileIds([]);
     peerService.sendClientAction('ACTION_RESET_TURN');
   };
 
-  // Show Lobby if not in playing/ended state
   if (!gameState || gameState.status === 'lobby') {
     return (
       <Lobby
@@ -214,12 +215,14 @@ export const App: React.FC = () => {
     );
   }
 
+  const selectedTilesObjects = getSelectedTilesObjects();
+
   return (
     <div className="w-screen h-screen flex flex-col bg-slate-950 text-slate-100 overflow-hidden font-sans select-none">
-      {/* Error Toast */}
+      {/* Error Toast Notification */}
       {errorMessage && (
-        <div className="fixed top-14 left-1/2 -translate-x-1/2 bg-red-600 text-white font-bold text-xs px-4 py-2 rounded-xl shadow-2xl z-50 animate-bounce">
-          {errorMessage}
+        <div className="fixed top-14 left-1/2 -translate-x-1/2 bg-red-600 text-white font-black text-xs sm:text-sm px-5 py-2.5 rounded-2xl shadow-2xl z-50 animate-bounce border-2 border-white/20">
+          ⚠️ {errorMessage}
         </div>
       )}
 
@@ -237,11 +240,11 @@ export const App: React.FC = () => {
         localPlayerId={localPlayerId}
       >
         <TableBoard
-          tableSets={gameState.tableSets}
-          selectedTileId={selectedTileId}
+          tableGrid={gameState.tableGrid || []}
+          selectedTiles={selectedTilesObjects}
           onTileClick={handleTileClick}
-          onMoveTileToSet={handleMoveTileToSet}
-          onCreateNewSetWithSelectedTile={handleCreateNewSetWithSelectedTile}
+          onCellClick={handleCellClick}
+          onDropTileToCell={handleDropTileToCell}
           isMyTurn={isMyTurn}
         />
       </FourSidesLayout>
@@ -250,8 +253,8 @@ export const App: React.FC = () => {
       {localPlayer && (
         <PlayerRack
           hand={localPlayer.hand}
-          selectedTileId={selectedTileId}
-          onTileClick={(tile) => handleTileClick(tile)}
+          selectedTileIds={selectedTileIds}
+          onTileClick={handleTileClick}
           onSortHand={handleSortHand}
           onEndTurn={handleEndTurn}
           onDrawTile={handleDrawTile}

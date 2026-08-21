@@ -7,6 +7,12 @@ export interface Tile {
   isJoker: boolean;
 }
 
+export interface GridTile {
+  tile: Tile;
+  row: number;
+  col: number;
+}
+
 export type SetType = 'group' | 'run' | 'invalid';
 
 export interface TileSet {
@@ -36,7 +42,7 @@ export type GameStatus = 'lobby' | 'playing' | 'ended';
 
 export interface TurnSnapshot {
   hand: Tile[];
-  tableSets: TileSet[];
+  tableGrid: GridTile[];
   hasMelded: boolean;
 }
 
@@ -46,7 +52,8 @@ export interface GameState {
   players: Player[];
   currentTurnIndex: number;
   drawPile: Tile[];
-  tableSets: TileSet[];
+  tableGrid: GridTile[]; // Transparent 2D grid board tiles
+  tableSets?: TileSet[]; // Legacy fallback if needed
   turnTimerRemaining: number;
   settings: RoomSettings;
   winnerId?: string | null;
@@ -63,6 +70,7 @@ export type PeerMessageType =
   | 'ACTION_END_TURN'
   | 'ACTION_DRAW'
   | 'ACTION_RESET_TURN'
+  | 'ACTION_ERROR'
   | 'START_GAME'
   | 'SETTINGS_UPDATE'
   | 'HOST_LEAVING';

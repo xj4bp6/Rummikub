@@ -1,4 +1,4 @@
-import type { Tile, TileSet } from '../types/game';
+import type { Tile, TileSet, GridTile } from '../types/game';
 
 export interface SetValidationResult {
   isValid: boolean;
@@ -6,6 +6,110 @@ export interface SetValidationResult {
   score?: number;
   jokerValues?: Record<string, number>; // tileId -> represented value
   errorReason?: string;
+}
+
+export const GRID_ROWS = 10;
+export const GRID_COLS = 16;
+
+/**
+ * Scans a 2D Grid of tiles and extracts all horizontal contiguous tile sets.
+ */
+export function extractTileSetsFromGrid(gridTiles: GridTile[]): {
+  sets: TileSet[];
+  singleTiles: GridTile[];
+} {
+  // Build lookup map: `${row}_${col}` -> Tile
+  const gridMap = new Map<string, Tile>();
+  const tileToPosMap = new Map<string, GridTile>();
+
+  gridTiles.forEach((gt) => {
+    const key = `${gt.row}_${gt.col}`;
+    gridMap.set(key, gt.tile);
+    tileToPosMap.set(gt.tile.id, gt);
+  });
+
+  const extractedSets: TileSet[] = [];
+  const singleTiles: GridTile[] = [];
+
+  for (let r = 0; r < GRID_ROWS; r++) {
+    let currentSequence: Tile[] = [];
+
+    for (let c = 0; c < GRID_COLS; c++) {
+      const key = `${r}_${c}`;
+      const tile = gridMap.get(key);
+
+      if (tile) {
+        currentSequence.push(tile);
+      } else {
+        if (currentSequence.length > 0) {
+          if (currentSequence.length < 3) {
+            currentSequence.forEach((t) => {
+              const pos = tileToPosMap.get(t.id);
+              if (pos) singleTiles.push(pos);
+            });
+          } else {
+            extractedSets.push({
+              id: `grid-set-${r}-${c}-${Math.random().toString(36).substr(2, 4)}`,
+              tiles: currentSequence,
+            });
+          }
+          currentSequence = [];
+        }
+      }
+    }
+
+    // End of row check
+    if (currentSequence.length > 0) {
+      if (currentSequence.length < 3) {
+        currentSequence.forEach((t) => {
+          const pos = tileToPosMap.get(t.id);
+          if (pos) singleTiles.push(pos);
+        });
+      } else {
+        extractedSets.push({
+          id: `grid-set-${r}-end-${Math.random().toString(36).substr(2, 4)}`,
+          tiles: currentSequence,
+        });
+      }
+    }
+  }
+
+  return { sets: extractedSets, singleTiles };
+}
+
+/**
+ * Validates all tiles placed on the grid board.
+ */
+export function validateGridBoard(gridTiles: GridTile[]): {
+  allValid: boolean;
+  extractedSets: TileSet[];
+  errorReason?: string;
+} {
+  const { sets, singleTiles } = extractTileSetsFromGrid(gridTiles);
+
+  if (singleTiles.length > 0) {
+    return {
+      allValid: false,
+      extractedSets: sets,
+      errorReason: `牌桌上存在不滿 3 張的單獨卡牌 (${singleTiles.length} 張)`,
+    };
+  }
+
+  for (const set of sets) {
+    const res = validateTileSet(set);
+    if (!res.isValid) {
+      return {
+        allValid: false,
+        extractedSets: sets,
+        errorReason: res.errorReason || '牌桌存在不合法的組合！',
+      };
+    }
+  }
+
+  return {
+    allValid: true,
+    extractedSets: sets,
+  };
 }
 
 /**
@@ -18,7 +122,6 @@ export function validateGroup(tiles: Tile[]): SetValidationResult {
 
   const nonJokers = tiles.filter((t) => !t.isJoker);
   if (nonJokers.length === 0) {
-    // Only jokers (e.g. 3 jokers) - not possible as there are only 2 jokers in a 106 deck
     return { isValid: false, errorReason: 'Group cannot consist only of Jokers' };
   }
 
@@ -38,7 +141,6 @@ export function validateGroup(tiles: Tile[]): SetValidationResult {
     colorsUsed.add(t.color!);
   }
 
-  // Valid Group!
   const jokerValues: Record<string, number> = {};
   tiles.forEach((t) => {
     if (t.isJoker) {
@@ -76,18 +178,12 @@ export function validateRun(tiles: Tile[]): SetValidationResult {
     return { isValid: false, errorReason: 'All tiles in a run must have the same color' };
   }
 
-  // Check if non-jokers can form a strictly ascending consecutive sequence within tiles.length range
-  // Try all possible starting values for the run (from 1 to 13 - tiles.length + 1)
   const len = tiles.length;
   for (let startVal = 1; startVal <= 13 - len + 1; startVal++) {
     let possible = true;
     const currentJokerValues: Record<string, number> = {};
     let currentScore = 0;
 
-    // Check if `tiles` can match the sequence [startVal, startVal+1, ..., startVal+len-1]
-    // Note: order of tiles in array matters, or we can check if there exists a valid sequence.
-    // In Rummikub, tiles in a run on the table are arranged in sequential order.
-    // Let's check positional matching for tiles array order:
     for (let i = 0; i < len; i++) {
       const expectedVal = startVal + i;
       const tile = tiles[i];
@@ -118,7 +214,7 @@ export function validateRun(tiles: Tile[]): SetValidationResult {
 }
 
 /**
- * Validates a single TileSet (can be either a Group or a Run).
+ * Validates a single TileSet (Group or Run).
  */
 export function validateTileSet(set: TileSet): SetValidationResult {
   const groupRes = validateGroup(set.tiles);
@@ -134,27 +230,7 @@ export function validateTileSet(set: TileSet): SetValidationResult {
 }
 
 /**
- * Validates all sets on the table. Returns true if EVERY set is valid.
- */
-export function validateTableSets(sets: TileSet[]): { allValid: boolean; invalidSetIds: string[] } {
-  const invalidSetIds: string[] = [];
-
-  for (const set of sets) {
-    if (set.tiles.length === 0) continue; // Ignore empty sets
-    const res = validateTileSet(set);
-    if (!res.isValid) {
-      invalidSetIds.push(set.id);
-    }
-  }
-
-  return {
-    allValid: invalidSetIds.length === 0,
-    invalidSetIds,
-  };
-}
-
-/**
- * Calculates total initial meld points from tiles played from hand.
+ * Calculates total initial meld points from newly played sets.
  */
 export function calculateMeldPoints(playedSets: TileSet[]): { totalPoints: number; isValidMelds: boolean } {
   let totalPoints = 0;
@@ -174,7 +250,6 @@ export function calculateMeldPoints(playedSets: TileSet[]): { totalPoints: numbe
 
 /**
  * Calculates endgame score for remaining hand tiles.
- * Regular tiles = face value. Joker = 30 points penalty!
  */
 export function calculateHandEndgamePoints(hand: Tile[]): { totalPoints: number; detail: string } {
   let totalPoints = 0;
@@ -195,4 +270,33 @@ export function calculateHandEndgamePoints(hand: Tile[]): { totalPoints: number;
     totalPoints,
     detail: parts.length > 0 ? parts.join(', ') : '無手牌(0分)',
   };
+}
+
+/**
+ * Utility: Checks if adjacent tiles in hand form a valid chain (consecutive run or matching group).
+ */
+export function findConnectedChain(tiles: Tile[], startIndex: number): Tile[] {
+  if (startIndex < 0 || startIndex >= tiles.length) return [];
+  const chain: Tile[] = [tiles[startIndex]];
+
+  for (let i = startIndex + 1; i < tiles.length; i++) {
+    const prev = chain[chain.length - 1];
+    const curr = tiles[i];
+
+    // Check if curr can extend run (same color, +1) or group (same value, diff color)
+    if (!prev.isJoker && !curr.isJoker) {
+      const isConsecutiveRun = prev.color === curr.color && (curr.value || 0) === (prev.value || 0) + 1;
+      const isMatchingGroup = (prev.value || 0) === (curr.value || 0) && prev.color !== curr.color;
+
+      if (isConsecutiveRun || isMatchingGroup) {
+        chain.push(curr);
+      } else {
+        break;
+      }
+    } else {
+      chain.push(curr);
+    }
+  }
+
+  return chain;
 }
