@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import type { Tile } from '../types/game';
 import { TileComponent } from './TileComponent';
-import { Palette, Hash, RotateCcw, Download, CheckCircle, Flame, Layers, Undo2 } from 'lucide-react';
+import { Palette, Hash, RotateCcw, Download, CheckCircle, Flame, Layers, Undo2, ChevronLeft, ChevronRight } from 'lucide-react';
 
 interface PlayerRackProps {
   hand: Tile[];
@@ -35,6 +35,7 @@ export const PlayerRack: React.FC<PlayerRackProps> = ({
   hasMelded,
 }) => {
   const selectedSet = new Set(selectedTileIds);
+  const rackRef = useRef<HTMLDivElement>(null);
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -48,8 +49,15 @@ export const PlayerRack: React.FC<PlayerRackProps> = ({
     }
   };
 
+  const scrollRack = (direction: 'left' | 'right') => {
+    if (rackRef.current) {
+      const scrollAmount = direction === 'left' ? -220 : 220;
+      rackRef.current.scrollBy({ left: scrollAmount, behavior: 'smooth' });
+    }
+  };
+
   return (
-    <div className="w-full bg-slate-900 border-t border-slate-800 p-2 flex flex-col gap-2 shadow-2xl z-30 select-none">
+    <div className="w-full bg-slate-900 border-t border-slate-800 p-2 flex flex-col gap-1.5 shadow-2xl z-30 select-none">
       {/* Control Action Toolbar */}
       <div className="flex flex-wrap items-center justify-between gap-1.5 text-xs">
         {/* Sorting Buttons & Meld Status */}
@@ -146,46 +154,76 @@ export const PlayerRack: React.FC<PlayerRackProps> = ({
         )}
       </div>
 
-      {/* Hand Cards Horizontal Rack - Supports Drag & Drop & Touch Drop */}
-      <div
-        onDragOver={handleDragOver}
-        onDrop={handleDrop}
-        onClick={() => {
-          if (isMyTurn && isGridTileSelected) {
-            onRackClick();
-          }
-        }}
-        className={`
-          w-full min-h-[72px] max-h-[140px] overflow-x-auto overflow-y-hidden p-2 bg-slate-950/90 border rounded-2xl flex items-center gap-1.5 custom-scrollbar transition-all
-          ${
-            isMyTurn && isGridTileSelected
-              ? 'border-cyan-400/80 bg-cyan-950/20 cursor-pointer ring-2 ring-cyan-500/30'
-              : 'border-slate-800/90'
-          }
-        `}
-      >
-        {hand.length === 0 ? (
-          <div className="w-full text-center text-xs text-slate-500 py-3">
-            {isGridTileSelected ? '點擊或將卡牌拖拽至此處收回手牌' : '手牌已完全出完！'}
-          </div>
-        ) : (
-          hand.map((tile) => (
-            <div
-              key={tile.id}
-              draggable={isMyTurn}
-              onDragStart={(e) => {
-                e.dataTransfer.setData('text/plain', tile.id);
-              }}
-              className="flex-shrink-0"
-            >
-              <TileComponent
-                tile={tile}
-                size="md"
-                isSelected={selectedSet.has(tile.id)}
-                onClick={() => onTileClick(tile)}
-              />
+      {/* Hand Cards Horizontal Rack Container with Touch Pan & Arrow Controls */}
+      <div className="relative w-full flex items-center gap-1">
+        {/* Left Scroll Button */}
+        {hand.length > 8 && (
+          <button
+            type="button"
+            onClick={() => scrollRack('left')}
+            className="flex-shrink-0 w-7 h-14 bg-slate-800/90 hover:bg-slate-700 text-slate-300 rounded-xl flex items-center justify-center border border-slate-700 shadow-md active:scale-95 transition"
+            title="向左滑動手牌"
+          >
+            <ChevronLeft className="w-5 h-5" />
+          </button>
+        )}
+
+        {/* Scrollable Hand Rack Area */}
+        <div
+          ref={rackRef}
+          onDragOver={handleDragOver}
+          onDrop={handleDrop}
+          onClick={() => {
+            if (isMyTurn && isGridTileSelected) {
+              onRackClick();
+            }
+          }}
+          style={{ touchAction: 'pan-x' }}
+          className={`
+            w-full min-h-[72px] max-h-[140px] overflow-x-auto overflow-y-hidden p-2 bg-slate-950/90 border rounded-2xl flex items-center gap-1.5 custom-scrollbar transition-all
+            ${
+              isMyTurn && isGridTileSelected
+                ? 'border-cyan-400/80 bg-cyan-950/20 cursor-pointer ring-2 ring-cyan-500/30'
+                : 'border-slate-800/90'
+            }
+          `}
+        >
+          {hand.length === 0 ? (
+            <div className="w-full text-center text-xs text-slate-500 py-3">
+              {isGridTileSelected ? '點擊或將卡牌拖拽至此處收回手牌' : '手牌已完全出完！'}
             </div>
-          ))
+          ) : (
+            hand.map((tile) => (
+              <div
+                key={tile.id}
+                draggable={isMyTurn}
+                onDragStart={(e) => {
+                  e.dataTransfer.setData('text/plain', tile.id);
+                }}
+                style={{ touchAction: 'pan-x' }}
+                className="flex-shrink-0 touch-pan-x"
+              >
+                <TileComponent
+                  tile={tile}
+                  size="md"
+                  isSelected={selectedSet.has(tile.id)}
+                  onClick={() => onTileClick(tile)}
+                />
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Right Scroll Button */}
+        {hand.length > 8 && (
+          <button
+            type="button"
+            onClick={() => scrollRack('right')}
+            className="flex-shrink-0 w-7 h-14 bg-slate-800/90 hover:bg-slate-700 text-slate-300 rounded-xl flex items-center justify-center border border-slate-700 shadow-md active:scale-95 transition"
+            title="向右滑動手牌"
+          >
+            <ChevronRight className="w-5 h-5" />
+          </button>
         )}
       </div>
     </div>
