@@ -70,13 +70,11 @@ export const App: React.FC = () => {
     const tiles: Tile[] = [];
 
     selectedTileIds.forEach((id) => {
-      // Find in hand
       const inHand = localPlayer.hand.find((t) => t.id === id);
       if (inHand) {
         tiles.push(inHand);
         return;
       }
-      // Find in grid
       const inGrid = gameState.tableGrid.find((gt) => gt.tile.id === id);
       if (inGrid) {
         tiles.push(inGrid.tile);
@@ -86,20 +84,23 @@ export const App: React.FC = () => {
     return tiles;
   };
 
+  // Check if current selection contains tiles from grid
+  const isGridTileSelected = (): boolean => {
+    if (!gameState || selectedTileIds.length === 0) return false;
+    return selectedTileIds.some((id) => gameState.tableGrid.some((gt) => gt.tile.id === id));
+  };
+
   const handleTileClick = (tile: Tile) => {
     if (!isMyTurn || !localPlayer) return;
 
     if (selectedTileIds.includes(tile.id)) {
-      // Unselect if clicked again
       setSelectedTileIds([]);
     } else {
-      // Check if clicked in Hand -> Auto chain detection!
       const handIndex = localPlayer.hand.findIndex((t) => t.id === tile.id);
       if (handIndex !== -1) {
         const chain = findConnectedChain(localPlayer.hand, handIndex);
         setSelectedTileIds(chain.map((t) => t.id));
       } else {
-        // Single selection on grid
         setSelectedTileIds([tile.id]);
       }
     }
@@ -113,19 +114,41 @@ export const App: React.FC = () => {
     let newTableGrid = [...gameState.tableGrid];
     const tilesToMove = getSelectedTilesObjects();
 
-    // 1. Remove selected tiles from hand & grid
     selectedTileIds.forEach((id) => {
       newHand = newHand.filter((t) => t.id !== id);
       newTableGrid = newTableGrid.filter((gt) => gt.tile.id !== id);
     });
 
-    // 2. Place selected tiles starting at (targetRow, targetCol + i)
     tilesToMove.forEach((tile, idx) => {
       const colOffset = targetCol + idx;
       if (colOffset < 16) {
-        // Clear any existing tile at destination
         newTableGrid = newTableGrid.filter((gt) => !(gt.row === targetRow && gt.col === colOffset));
         newTableGrid.push({ tile, row: targetRow, col: colOffset });
+      }
+    });
+
+    setSelectedTileIds([]);
+    peerService.sendClientAction('ACTION_MOVE', { hand: newHand, tableGrid: newTableGrid });
+  };
+
+  // Recalls selected grid tiles back into player's hand during current turn
+  const handleReturnSelectedGridTilesToHand = () => {
+    if (!isMyTurn || !gameState || !localPlayer) return;
+
+    const tilesToReturn = getSelectedTilesObjects();
+    if (tilesToReturn.length === 0) return;
+
+    let newHand = [...localPlayer.hand];
+    let newTableGrid = [...gameState.tableGrid];
+
+    selectedTileIds.forEach((id) => {
+      newTableGrid = newTableGrid.filter((gt) => gt.tile.id !== id);
+    });
+
+    // Add back to hand if not already present
+    tilesToReturn.forEach((tile) => {
+      if (!newHand.some((t) => t.id === tile.id)) {
+        newHand.push(tile);
       }
     });
 
@@ -139,15 +162,12 @@ export const App: React.FC = () => {
 
     let newHand = [...localPlayer.hand];
     let newTableGrid = [...gameState.tableGrid];
-
     let tileToMove: Tile | null = null;
 
-    // Find in hand
     const handIdx = newHand.findIndex((t) => t.id === tileId);
     if (handIdx !== -1) {
       tileToMove = newHand.splice(handIdx, 1)[0];
     } else {
-      // Find in grid
       const gridIdx = newTableGrid.findIndex((gt) => gt.tile.id === tileId);
       if (gridIdx !== -1) {
         tileToMove = newTableGrid.splice(gridIdx, 1)[0].tile;
@@ -155,7 +175,6 @@ export const App: React.FC = () => {
     }
 
     if (tileToMove) {
-      // Clear target cell
       newTableGrid = newTableGrid.filter((gt) => !(gt.row === targetRow && gt.col === targetCol));
       newTableGrid.push({ tile: tileToMove, row: targetRow, col: targetCol });
 
@@ -216,9 +235,10 @@ export const App: React.FC = () => {
   }
 
   const selectedTilesObjects = getSelectedTilesObjects();
+  const gridSelected = isGridTileSelected();
 
   return (
-    <div className="w-screen h-screen flex flex-col bg-slate-950 text-slate-100 overflow-hidden font-sans select-none">
+    <div className="w-full h-[100dvh] flex flex-col bg-slate-950 text-slate-100 overflow-hidden font-sans select-none">
       {/* Error Toast Notification */}
       {errorMessage && (
         <div className="fixed top-14 left-1/2 -translate-x-1/2 bg-red-600 text-white font-black text-xs sm:text-sm px-5 py-2.5 rounded-2xl shadow-2xl z-50 animate-bounce border-2 border-white/20">
@@ -254,7 +274,10 @@ export const App: React.FC = () => {
         <PlayerRack
           hand={localPlayer.hand}
           selectedTileIds={selectedTileIds}
+          isGridTileSelected={gridSelected}
           onTileClick={handleTileClick}
+          onRackClick={handleReturnSelectedGridTilesToHand}
+          onReturnToHand={handleReturnSelectedGridTilesToHand}
           onSortHand={handleSortHand}
           onEndTurn={handleEndTurn}
           onDrawTile={handleDrawTile}
