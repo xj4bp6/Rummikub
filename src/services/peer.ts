@@ -105,7 +105,14 @@ export class PeerService {
         });
 
         conn.on('close', () => {
-          if (this.onError) this.onError('與房主的連線已中斷');
+          if (this.gameState && this.gameState.status === 'playing') {
+            this.gameState.status = 'ended';
+            this.gameState.winnerId = this.localPlayerId;
+            this.gameState.endReason = '房主連線已中斷，遊戲結束！由在線玩家獲得勝利';
+            this.notifyStateChange();
+          } else if (this.onError) {
+            this.onError('與房主的連線已中斷');
+          }
         });
 
         conn.on('error', (err) => {
@@ -143,10 +150,25 @@ export class PeerService {
         if (player) {
           player.isDisconnected = true;
           const activePlayers = this.gameState.players.filter((p) => !p.isDisconnected);
-          if (activePlayers.length === 1) {
-            this.endGame(activePlayers[0].id, `因所有其他玩家已離開房間，【${activePlayers[0].name}】自動獲得勝利！`);
+          if (activePlayers.length <= 1) {
+            if (activePlayers.length === 1) {
+              this.endGame(activePlayers[0].id, `因所有其他玩家已離開房間，【${activePlayers[0].name}】自動獲得勝利！`);
+            } else {
+              this.endGame(null, '所有玩家均已離線，遊戲結束');
+            }
           } else {
-            this.broadcastState();
+            // Check if the player who disconnected was the current turn player
+            const currentTurnPlayer = this.gameState.players[this.gameState.currentTurnIndex];
+            if (currentTurnPlayer && currentTurnPlayer.id === conn.peer) {
+              if (this.gameState.turnSnapshot) {
+                currentTurnPlayer.hand = [...this.gameState.turnSnapshot.hand];
+                this.gameState.tableGrid = [...this.gameState.turnSnapshot.tableGrid];
+                currentTurnPlayer.hasMelded = this.gameState.turnSnapshot.hasMelded;
+              }
+              this.advanceTurn();
+            } else {
+              this.broadcastState();
+            }
           }
         }
       }
@@ -377,7 +399,14 @@ export class PeerService {
   private advanceTurn() {
     if (!this.gameState) return;
 
-    this.gameState.currentTurnIndex = (this.gameState.currentTurnIndex + 1) % this.gameState.players.length;
+    let nextIndex = (this.gameState.currentTurnIndex + 1) % this.gameState.players.length;
+    let attempts = 0;
+    while (this.gameState.players[nextIndex]?.isDisconnected && attempts < this.gameState.players.length) {
+      nextIndex = (nextIndex + 1) % this.gameState.players.length;
+      attempts++;
+    }
+
+    this.gameState.currentTurnIndex = nextIndex;
     this.takeTurnSnapshot();
     this.startTurnTimer();
     this.broadcastState();
@@ -448,7 +477,7 @@ export class PeerService {
     }
   }
 
-  private endGame(winnerId: string, reason: string) {
+  private endGame(winnerId: string | null, reason: string) {
     if (!this.gameState) return;
     if (this.turnTimerInterval) clearInterval(this.turnTimerInterval);
 
