@@ -138,11 +138,16 @@ export class PeerService {
       if (this.gameState && this.gameState.status === 'lobby') {
         this.gameState.players = this.gameState.players.filter((p) => p.id !== conn.peer);
         this.broadcastState();
-      } else if (this.gameState) {
+      } else if (this.gameState && this.gameState.status === 'playing') {
         const player = this.gameState.players.find((p) => p.id === conn.peer);
         if (player) {
           player.isDisconnected = true;
-          this.broadcastState();
+          const activePlayers = this.gameState.players.filter((p) => !p.isDisconnected);
+          if (activePlayers.length === 1) {
+            this.endGame(activePlayers[0].id, `因所有其他玩家已離開房間，【${activePlayers[0].name}】自動獲得勝利！`);
+          } else {
+            this.broadcastState();
+          }
         }
       }
     });
